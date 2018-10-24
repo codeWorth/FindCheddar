@@ -2,6 +2,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.opencv.core.Core;
@@ -19,15 +20,24 @@ public class ImageProcess implements Runnable {
 	private static final int minS = 150; // minimum saturation
 	private static int minArea = 0;
 	
+	private static CountDownLatch latch = new CountDownLatch(1);
 	private static Mat sourceImg;
-	private static boolean newImg = false;
 
+	/**
+	 * Last processed contour
+	 */
 	public static MatOfPoint lastProcessed;
+	/**
+	 * Last non-null contour
+	 */
 	public static MatOfPoint lastContour;
+	/**
+	 * Whether the frame has been processed and can be read now
+	 */
 	public static AtomicBoolean frameProcessed = new AtomicBoolean();
 	private static ImageProcess p;
 	
-	private boolean run = false;
+	private boolean running = false;
 	
 	private ImageProcess() {
 		
@@ -96,9 +106,7 @@ public class ImageProcess implements Runnable {
 				// draw the contour on the image in pure white. This is basically making a binary image, 
 				// where 1s are inside the contour and 0s are outside the contour
 				Imgproc.drawContours(contourImg, Arrays.asList(cont.mat), 0, new Scalar(255, 255, 255), -1);
-				
-				ImageUtil.imshow(contourImg);
-								
+												
 				double meanV = Core.mean(v, contourImg).val[0];
 				// find the mean value of the value image only inside the contour
 				if (meanV > bestV) { // if this one is higher,
@@ -120,41 +128,49 @@ public class ImageProcess implements Runnable {
 
 	@Override
 	public void run() {
-		while (run) {
-			if (newImg) {
-				newImg = false;
-				lastProcessed = processImage(sourceImg);
-				if (lastProcessed != null) {
-					lastContour = lastProcessed;
-				}
-				frameProcessed.set(true);
-			} else {
-				try {
-					Thread.sleep(10);
-				} catch (InterruptedException e) {
-					e.printStackTrace();
-				}
+		running = true;
+		while (true) {
+			try {
+				latch.await();
+			} catch (InterruptedException e) {
+				e.printStackTrace();
 			}
+			if (!running) {
+				break;
+			}
+			
+			latch = new CountDownLatch(1);
+			System.out.println("Processing image");
+			
+			lastProcessed = processImage(sourceImg);
+			if (lastProcessed != null) {
+				lastContour = lastProcessed;
+			}
+			frameProcessed.set(true);
 		}
 	}
 	
 	public static void start() {
-		if (p == null || !p.run) {
+		if (p == null || !p.running) {
 			p = new ImageProcess();
-			p.run = true;
+			p.running = true;
 			Thread t = new Thread(p);
 			t.start();
 		}
 	}
 	
 	public static void stop() {
-		p.run = false;
+		sourceImg = null;
+		if (p != null) {
+			p.running = false;
+		}
+		latch.countDown();
 		frameProcessed.set(false);
 	}
 	
 	public static void setSourceImage(Mat srcImg) {
 		sourceImg = srcImg;
-		newImg = true;
+		latch.countDown();
 	}
 
 }
